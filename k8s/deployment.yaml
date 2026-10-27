@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: jenkins-dms-repository
-          image: asia-south1-docker.pkg.dev/project-f45bd8e2-3bd4-49b8-a29/jenkins-dms-repository/jenkins-dms-image:latest
+          image: asia-south1-docker.pkg.dev/project-f45bd8e2-3bd4-49b8-a29/jenkins-dms-repository/dms-image:latest
           ports:
             - containerPort: 8080
           resources:
