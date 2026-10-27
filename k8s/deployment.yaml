@@ -1,0 +1,33 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gke-demo
+  namespace: demo
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: gke-demo
+  template:
+    metadata:
+      labels:
+        app: gke-demo
+    spec:
+      containers:
+        - name: gke-demo
+          image: asia-south1-docker.pkg.dev/project-f45bd8e2-3bd4-49b8-a29/jenkins-gke-demo/gke-demo:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
