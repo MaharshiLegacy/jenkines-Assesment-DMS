@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gke-demo
+  name: jenkins-dms-repository
   namespace: demo
 spec:
   replicas: 1
@@ -13,15 +13,15 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: gke-demo
+      app: jenkins-dms-repository
   template:
     metadata:
       labels:
-        app: gke-demo
+        app: jenkins-dms-repository
     spec:
       containers:
-        - name: gke-demo
-          image: asia-south1-docker.pkg.dev/project-f45bd8e2-3bd4-49b8-a29/jenkins-gke-demo/gke-demo:latest
+        - name: jenkins-dms-repository
+          image: asia-south1-docker.pkg.dev/project-f45bd8e2-3bd4-49b8-a29/jenkins-dms-repository/jenkins-dms-image:latest
           ports:
             - containerPort: 8080
           resources:
