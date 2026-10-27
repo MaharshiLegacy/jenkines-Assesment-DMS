@@ -47,8 +47,8 @@ stage('Build Docker Image') {
 
             PROJECT_ID="project-f45bd8e2-3bd4-49b8-a29"
             REGION="asia-south1"
-            REPOSITORY="jenkins-gke-demo"
-            IMAGE_NAME="gke-demo"
+            REPOSITORY="jenkins-dms-repository"
+            IMAGE_NAME="dms-image"
 
             IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
 
@@ -68,8 +68,8 @@ stage('Push Image to Artifact Registry') {
 
             PROJECT_ID="project-f45bd8e2-3bd4-49b8-a29"
             REGION="asia-south1"
-            REPOSITORY="jenkins-gke-demo"
-            IMAGE_NAME="gke-demo"
+            REPOSITORY="jenkins-dms-repository"
+            IMAGE_NAME="dms-image"
 
             IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
 
@@ -94,7 +94,9 @@ stage('Deploy to GKE') {
             PROJECT_ID="project-f45bd8e2-3bd4-49b8-a29"
             REGION="asia-south1"
             CLUSTER="jenkins-gke-cluster"
-            IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/jenkins-gke-demo/gke-demo:${BUILD_NUMBER}"
+            REPOSITORY="jenkins-dms-repository"
+            IMAGE_NAME="dms-image"
+            IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${BUILD_NUMBER}"
 
             gcloud config set project "${PROJECT_ID}"
 
