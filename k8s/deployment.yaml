@@ -31,7 +31,7 @@ spec:
           env:
             # H2 database file and uploads both live on the persistent disk mounted at /data
             - name: SPRING_DATASOURCE_URL
-              value: "jdbc:h2:file:/data/dmsdb"
+              value: "jdbc:postgresql://35.234.222.138:5432/DMS_DB"
             - name: APP_STORAGE_DIR
               value: "/data/uploads"
             # Domain restriction. Calls through the port-forward use "localhost".
