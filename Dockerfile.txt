@@ -13,8 +13,8 @@ COPY --chown=app:app target/*.jar app.jar
 USER 10001:10001
 EXPOSE 8080
 
-# Container-aware JVM: heap sized from the pod memory limit; exit on OOM so K8s restarts the pod
-ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError" \
+# 60% heap leaves room for metaspace/threads/buffers inside a 1Gi pod limit (75% risks OOMKilled)
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=60 -XX:+ExitOnOutOfMemoryError" \
     APP_STORAGE_DIR=/data/uploads
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
