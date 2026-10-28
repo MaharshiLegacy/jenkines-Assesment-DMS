@@ -1,80 +1,120 @@
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jenkins-dms-repository          # Jenkinsfile DEPLOYMENT variable must match this name
+  name: jenkins-dms-repository
   namespace: demo
   labels:
     app: jenkins-dms-repository
+
 spec:
-  replicas: 1                           # H2 file DB + ReadWriteOnce disk => exactly one pod
+  replicas: 1
   strategy:
-    type: Recreate                      # old pod must release the disk/DB before the new pod starts
+    type: Recreate
+
   selector:
     matchLabels:
       app: jenkins-dms-repository
+
   template:
     metadata:
       labels:
         app: jenkins-dms-repository
+
     spec:
+      serviceAccountName: dms-ksa
+
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
-        fsGroup: 10001                  # makes the mounted disk writable by the non-root app user
+        fsGroup: 10001
+
       containers:
+        # DMS Spring Boot application
         - name: jenkins-dms-repository
           image: asia-south1-docker.pkg.dev/project-f45bd8e2-3bd4-49b8-a29/jenkins-dms-repository/dms-image:latest
+          imagePullPolicy: Always
+
           ports:
             - name: http
               containerPort: 8080
+
           env:
-            # H2 database file and uploads both live on the persistent disk mounted at /data
+            # Connect to Cloud SQL through the local proxy sidecar
             - name: SPRING_DATASOURCE_URL
-              value: "jdbc:postgresql://35.234.222.138:5432/DMS_DB"
+              value: "jdbc:postgresql://127.0.0.1:5432/DMS_DB"
+
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: dms-db-secrets
+                  key: username
+
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dms-db-secrets
+                  key: password
+
+            # Persistent upload directory
             - name: APP_STORAGE_DIR
               value: "/data/uploads"
-            # Domain restriction. Calls through the port-forward use "localhost".
-            # If you expose a public IP/domain, add it to ALLOWED_HOSTS (otherwise every call returns 403).
+
+            # Update these values for your real public hostname when applicable
             - name: APP_SECURITY_ALLOWED_HOSTS
               value: "localhost,127.0.0.1"
+
             - name: APP_SECURITY_ADMIN_HOSTS
               value: "localhost"
-            # Secrets come from the Kubernetes Secret "dms-secrets" (created once, see notes)
+
+            - name: APP_SECURITY_ALLOWED_ORIGINS
+              value: "http://localhost:3000"
+
+            # Existing Kubernetes secrets
             - name: APP_JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: dms-secrets
                   key: jwt-secret
+
             - name: APP_SEED_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: dms-secrets
                   key: admin-password
+
             - name: APP_SEED_USER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: dms-secrets
                   key: user-password
+
+            - name: APP_SEED_ENABLED
+              value: "false"
+
           volumeMounts:
             - name: data
               mountPath: /data
-          # Give Spring Boot up to 150s to start before liveness/readiness take over
+
           startupProbe:
             tcpSocket:
               port: 8080
             periodSeconds: 5
             failureThreshold: 30
+
           readinessProbe:
             tcpSocket:
               port: 8080
             periodSeconds: 10
             failureThreshold: 3
+
           livenessProbe:
             tcpSocket:
               port: 8080
             periodSeconds: 20
             failureThreshold: 3
+
           resources:
             requests:
               cpu: 250m
@@ -82,6 +122,26 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+
+        # Cloud SQL Auth Proxy sidecar
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.18.2
+          args:
+            - "--structured-logs"
+            - "--port=5432"
+            - "project-f45bd8e2-3bd4-49b8-a29:asia-south1:dms-postgres"
+
+          securityContext:
+            runAsNonRoot: true
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
       volumes:
         - name: data
           persistentVolumeClaim:
