@@ -95,7 +95,7 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
-        # Cloud SQL Auth Proxy sidecar
+        # Cloud SQL Auth Proxy sidecar 
         - name: cloud-sql-proxy
           image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.18.2
           args:
