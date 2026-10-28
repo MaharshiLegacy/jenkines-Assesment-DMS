@@ -4,10 +4,10 @@ metadata:
   name: dms-service
   namespace: demo
 spec:
-  type: ClusterIP                       # private. Reach it with: kubectl port-forward -n demo svc/dms-service 8080:80
+  type: LoadBalancer
   selector:
     app: jenkins-dms-repository
   ports:
-    - name: http
-      port: 80
+    - port: 80
       targetPort: 8080
+      protocol: TCP
