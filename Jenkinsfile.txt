@@ -1,144 +1,116 @@
 pipeline {
     agent any
-    tools{
-      jdk 'java21'
+
+    tools {
+        jdk 'java21'
     }
 
-  
-    
-    stages{
-         stage('Check Java Version') {
-    steps {
-        sh 'chmod +x mvnw'
-        sh 'echo "JAVA_HOME=$JAVA_HOME"'
-        sh 'java -version'
-        sh './mvnw -version'
+    environment {
+        PROJECT_ID = 'project-f45bd8e2-3bd4-49b8-a29'
+        REGION     = 'asia-south1'
+        CLUSTER    = 'jenkins-gke-cluster'
+        REPOSITORY = 'jenkins-dms-repository'
+        IMAGE_NAME = 'dms-image'
+        IMAGE_URI  = "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+        NAMESPACE  = 'demo'
+        DEPLOYMENT = 'jenkins-dms-repository'   // must match metadata.name in k8s/deployment.yaml
     }
-}
-      stage('Checkout') {
-              steps {
-                  checkout scm
-              }
-          }
 
-        stage('Check Java Compiler') {
-    steps {
-        sh 'echo "JAVA_HOME=$JAVA_HOME"'
-        sh 'which java'
-        sh 'java -version'
-        sh 'which javac'
-        sh 'javac -version'
-        sh 'javac --help | grep -A 2 -- "--release"'
-    }
-}
-        
-    stage('Build and Test') {
-    steps {
-        sh 'chmod +x mvnw'
-        sh './mvnw clean verify'
-    }
-}
+    stages {
 
-        
-stage('Build Docker Image') {
-    steps {
-        sh '''
-            set -eu
+        // Declarative pipelines already check out the repo automatically, so no explicit Checkout stage is needed.
 
-            PROJECT_ID="project-f45bd8e2-3bd4-49b8-a29"
-            REGION="asia-south1"
-            REPOSITORY="jenkins-dms-repository"
-            IMAGE_NAME="dms-image"
+        stage('Verify Toolchain') {
+            steps {
+                sh '''
+                    chmod +x mvnw
+                    echo "JAVA_HOME=$JAVA_HOME"
+                    java -version
+                    javac -version
+                    ./mvnw -version
+                '''
+            }
+        }
 
-            IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+        stage('Build and Test') {
+            steps {
+                sh './mvnw -B clean verify'
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+                }
+            }
+        }
 
-            echo "Building Docker image: ${IMAGE_URI}:${BUILD_NUMBER}"
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    set -eu
+                    echo "Building Docker image: ${IMAGE_URI}:${BUILD_NUMBER}"
+                    docker build \
+                        -t "${IMAGE_URI}:${BUILD_NUMBER}" \
+                        -t "${IMAGE_URI}:latest" .
+                '''
+            }
+        }
 
-            docker build \
-                -t "${IMAGE_URI}:${BUILD_NUMBER}" \
-                -t "${IMAGE_URI}:latest" .
-        '''
-    }
-}
+        stage('Push Image to Artifact Registry') {
+            steps {
+                sh '''
+                    set -eu
+                    gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+                    docker push "${IMAGE_URI}:${BUILD_NUMBER}"
+                    docker push "${IMAGE_URI}:latest"
+                    echo "Image pushed: ${IMAGE_URI}:${BUILD_NUMBER}"
+                '''
+            }
+        }
 
-stage('Push Image to Artifact Registry') {
-    steps {
-        sh '''
-            set -eu
+        stage('Deploy to GKE') {
+            steps {
+                sh '''
+                    set -eu
 
-            PROJECT_ID="project-f45bd8e2-3bd4-49b8-a29"
-            REGION="asia-south1"
-            REPOSITORY="jenkins-dms-repository"
-            IMAGE_NAME="dms-image"
+                    gcloud config set project "${PROJECT_ID}"
+                    gcloud container clusters get-credentials "${CLUSTER}" \
+                        --region="${REGION}" --project="${PROJECT_ID}"
 
-            IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+                    kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-            gcloud auth configure-docker \
-                "${REGION}-docker.pkg.dev" --quiet
+                    # The app needs this Secret (create it once, see notes). Fail early with a clear message.
+                    kubectl get secret dms-secrets -n "${NAMESPACE}" >/dev/null 2>&1 || {
+                        echo "ERROR: Secret dms-secrets is missing in namespace ${NAMESPACE}"; exit 1; }
 
-            docker push "${IMAGE_URI}:${BUILD_NUMBER}"
-            docker push "${IMAGE_URI}:latest"
+                    # Disk and Service first, then the Deployment with THIS build's unique image tag
+                    kubectl apply -n "${NAMESPACE}" -f k8s/pvc.yaml -f k8s/service.yaml
+                    sed "s|image: .*|image: ${IMAGE_URI}:${BUILD_NUMBER}|" k8s/deployment.yaml \
+                        | kubectl apply -n "${NAMESPACE}" -f -
 
-            echo "Image pushed successfully."
-            echo "${IMAGE_URI}:${BUILD_NUMBER}"
-        '''
-    }
-}
+                    # Wait for the new pod; if it never becomes ready, show why and roll back
+                    kubectl rollout status deployment/"${DEPLOYMENT}" -n "${NAMESPACE}" --timeout=300s || {
+                        echo "Rollout failed. Pod status and last logs:"
+                        kubectl get pods -n "${NAMESPACE}" -o wide || true
+                        kubectl logs deployment/"${DEPLOYMENT}" -n "${NAMESPACE}" --tail=50 || true
+                        kubectl rollout undo deployment/"${DEPLOYMENT}" -n "${NAMESPACE}" || true
+                        exit 1
+                    }
+                '''
+            }
+        }
 
-        
-stage('Deploy to GKE') {
-    steps {
-        sh '''
-            set -eu
-
-            PROJECT_ID="project-f45bd8e2-3bd4-49b8-a29"
-            REGION="asia-south1"
-            CLUSTER="jenkins-gke-cluster"
-            REPOSITORY="jenkins-dms-repository"
-            IMAGE_NAME="dms-image"
-            IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${BUILD_NUMBER}"
-
-            gcloud config set project "${PROJECT_ID}"
-
-            gcloud container clusters get-credentials "${CLUSTER}" \
-              --region="${REGION}" \
-              --project="${PROJECT_ID}"
-
-            kubectl create namespace demo \
-              --dry-run=client -o yaml | kubectl apply -f -
-
-            # Save the existing deployment revision for rollback.
-            if kubectl get deployment gke-demo -n demo >/dev/null 2>&1; then
-                echo "Existing deployment found."
-            else
-                echo "First deployment: Kubernetes will create the Deployment."
-            fi
-
-            # Apply the manifest and use this build's unique image tag.
-            sed "s|image: .*|image: ${IMAGE_URI}|" k8s/deployment.yaml \
-              | kubectl apply -f -
-
-            kubectl rollout status deployment/gke-demo \
-              -n demo --timeout=300s
-        '''
-    }
-}
-
-stage('Verify Deployment') {
-    steps {
-        sh '''
-            set -eu
-            kubectl get deployment gke-demo -n demo
-            kubectl get pods -n demo -o wide
-            kubectl get deployment gke-demo -n demo \
-              -o jsonpath='{.spec.template.spec.containers[0].image}'
-            echo
-        '''
-    }
-}
-
-
-        
-    
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                    set -eu
+                    kubectl get deployment "${DEPLOYMENT}" -n "${NAMESPACE}"
+                    kubectl get pods -n "${NAMESPACE}" -o wide
+                    kubectl get svc,pvc -n "${NAMESPACE}"
+                    kubectl get deployment "${DEPLOYMENT}" -n "${NAMESPACE}" \
+                        -o jsonpath='{.spec.template.spec.containers[0].image}'
+                    echo
+                '''
+            }
+        }
     }
 }
