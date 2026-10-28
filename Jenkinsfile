@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -13,21 +14,24 @@ pipeline {
         IMAGE_NAME = 'dms-image'
         IMAGE_URI  = "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
         NAMESPACE  = 'demo'
-        DEPLOYMENT = 'jenkins-dms-repository'   // must match metadata.name in k8s/deployment.yaml
+        DEPLOYMENT = 'jenkins-dms-repository'
+
+        // This must match the application container name in deployment.yaml.
+        CONTAINER_NAME = 'jenkins-dms-repository'
     }
 
     stages {
-
-        // Declarative pipelines already check out the repo automatically, so no explicit Checkout stage is needed.
-
         stage('Verify Toolchain') {
             steps {
                 sh '''
+                    set -eu
                     chmod +x mvnw
                     echo "JAVA_HOME=$JAVA_HOME"
                     java -version
                     javac -version
                     ./mvnw -version
+                    docker --version
+                    kubectl version --client
                 '''
             }
         }
@@ -38,7 +42,8 @@ pipeline {
             }
             post {
                 always {
-                    junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+                    junit allowEmptyResults: true,
+                          testResults: 'target/surefire-reports/*.xml'
                 }
             }
         }
@@ -47,7 +52,8 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    echo "Building Docker image: ${IMAGE_URI}:${BUILD_NUMBER}"
+                    echo "Building image: ${IMAGE_URI}:${BUILD_NUMBER}"
+
                     docker build \
                         -t "${IMAGE_URI}:${BUILD_NUMBER}" \
                         -t "${IMAGE_URI}:latest" .
@@ -59,10 +65,14 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+                    gcloud auth configure-docker \
+                        "${REGION}-docker.pkg.dev" --quiet
+
                     docker push "${IMAGE_URI}:${BUILD_NUMBER}"
                     docker push "${IMAGE_URI}:latest"
-                    echo "Image pushed: ${IMAGE_URI}:${BUILD_NUMBER}"
+
+                    echo "Pushed: ${IMAGE_URI}:${BUILD_NUMBER}"
                 '''
             }
         }
@@ -73,28 +83,73 @@ pipeline {
                     set -eu
 
                     gcloud config set project "${PROJECT_ID}"
+
                     gcloud container clusters get-credentials "${CLUSTER}" \
-                        --region="${REGION}" --project="${PROJECT_ID}"
+                        --region="${REGION}" \
+                        --project="${PROJECT_ID}"
 
-                    kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+                    kubectl get secret dms-secrets \
+                        -n "${NAMESPACE}" >/dev/null
 
-                    # The app needs this Secret (create it once, see notes). Fail early with a clear message.
-                    kubectl get secret dms-secrets -n "${NAMESPACE}" >/dev/null 2>&1 || {
-                        echo "ERROR: Secret dms-secrets is missing in namespace ${NAMESPACE}"; exit 1; }
+                    kubectl get secret dms-db-secrets \
+                        -n "${NAMESPACE}" >/dev/null
 
-                    # Disk and Service first, then the Deployment with THIS build's unique image tag
-                    kubectl apply -n "${NAMESPACE}" -f k8s/pvc.yaml -f k8s/service.yaml
-                    sed "s|image: .*|image: ${IMAGE_URI}:${BUILD_NUMBER}|" k8s/deployment.yaml \
-                        | kubectl apply -n "${NAMESPACE}" -f -
+                    # Save the currently deployed app image for recovery.
+                    OLD_IMAGE=$(kubectl get deployment "${DEPLOYMENT}" \
+                        -n "${NAMESPACE}" \
+                        -o "jsonpath={.spec.template.spec.containers[?(@.name==\\"${CONTAINER_NAME}\\")].image}")
 
-                    # Wait for the new pod; if it never becomes ready, show why and roll back
-                    kubectl rollout status deployment/"${DEPLOYMENT}" -n "${NAMESPACE}" --timeout=300s || {
-                        echo "Rollout failed. Pod status and last logs:"
-                        kubectl get pods -n "${NAMESPACE}" -o wide || true
-                        kubectl logs deployment/"${DEPLOYMENT}" -n "${NAMESPACE}" --tail=50 || true
-                        kubectl rollout undo deployment/"${DEPLOYMENT}" -n "${NAMESPACE}" || true
+                    if [ -z "$OLD_IMAGE" ]; then
+                        echo "ERROR: Could not find the application container."
+                        echo "Check CONTAINER_NAME against k8s/deployment.yaml."
                         exit 1
-                    }
+                    fi
+
+                    echo "Previous app image: $OLD_IMAGE"
+                    echo "New app image: ${IMAGE_URI}:${BUILD_NUMBER}"
+
+                    # Apply storage and Service resources.
+                    kubectl apply -n "${NAMESPACE}" \
+                        -f k8s/pvc.yaml \
+                        -f k8s/service.yaml
+
+                    # Update ONLY the Spring Boot container.
+                    # The Cloud SQL Auth Proxy image and configuration stay unchanged.
+                    kubectl set image \
+                        deployment/"${DEPLOYMENT}" \
+                        "${CONTAINER_NAME}=${IMAGE_URI}:${BUILD_NUMBER}" \
+                        -n "${NAMESPACE}"
+
+                    # Wait for the new ReplicaSet to become ready.
+                    if ! kubectl rollout status \
+                        deployment/"${DEPLOYMENT}" \
+                        -n "${NAMESPACE}" \
+                        --timeout=300s; then
+
+                        echo "Deployment failed. Collecting diagnostic information..."
+
+                        kubectl get pods -n "${NAMESPACE}" -o wide || true
+                        kubectl describe deployment "${DEPLOYMENT}" \
+                            -n "${NAMESPACE}" || true
+                        kubectl logs deployment/"${DEPLOYMENT}" \
+                            -n "${NAMESPACE}" \
+                            -c "${CONTAINER_NAME}" \
+                            --tail=100 || true
+
+                        echo "Restoring previous app image: $OLD_IMAGE"
+
+                        kubectl set image \
+                            deployment/"${DEPLOYMENT}" \
+                            "${CONTAINER_NAME}=${OLD_IMAGE}" \
+                            -n "${NAMESPACE}" || true
+
+                        kubectl rollout status \
+                            deployment/"${DEPLOYMENT}" \
+                            -n "${NAMESPACE}" \
+                            --timeout=180s || true
+
+                        exit 1
+                    fi
                 '''
             }
         }
@@ -103,14 +158,33 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    kubectl get deployment "${DEPLOYMENT}" -n "${NAMESPACE}"
-                    kubectl get pods -n "${NAMESPACE}" -o wide
-                    kubectl get svc,pvc -n "${NAMESPACE}"
-                    kubectl get deployment "${DEPLOYMENT}" -n "${NAMESPACE}" \
-                        -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+                    echo "Deployment status:"
+                    kubectl get deployment "${DEPLOYMENT}" \
+                        -n "${NAMESPACE}"
+
+                    echo "Application image:"
+                    kubectl get deployment "${DEPLOYMENT}" \
+                        -n "${NAMESPACE}" \
+                        -o "jsonpath={.spec.template.spec.containers[?(@.name==\\"${CONTAINER_NAME}\\")].image}"
                     echo
+
+                    echo "Pods:"
+                    kubectl get pods -n "${NAMESPACE}" -o wide
+
+                    echo "Services and PVCs:"
+                    kubectl get svc,pvc -n "${NAMESPACE}"
                 '''
             }
+        }
+    }
+
+    post {
+        success {
+            echo 'CI/CD pipeline completed successfully.'
+        }
+        failure {
+            echo 'CI/CD pipeline failed. Check the failed stage and Jenkins console output.'
         }
     }
 }
