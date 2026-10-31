@@ -9,7 +9,7 @@ import com.example.dms.model.Document;
 import com.example.dms.repository.DocumentRepository;
 import com.example.dms.repository.UserRepository;
 import com.example.dms.security.AppUserDetails;
-import com.example.dms.service.FileStorageService.StoredFile;
+import com.example.dms.service.StorageService.StoredFile;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -41,7 +41,7 @@ public class DocumentService {
 
     private final DocumentRepository documents;
     private final UserRepository users;
-    private final FileStorageService storage;
+    private final StorageService storage;
 
     // ------------------------------------------------------------------ create
 

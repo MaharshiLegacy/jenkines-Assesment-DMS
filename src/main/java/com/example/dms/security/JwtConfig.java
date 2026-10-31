@@ -45,7 +45,7 @@ public class JwtConfig {
     @Bean
     JwtDecoder jwtDecoder() {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(key).macAlgorithm(MacAlgorithm.HS256).build();
-        // validates signature + expiry (default) + issuer
+       
         decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(jwt.issuer()));
         return decoder;
     }

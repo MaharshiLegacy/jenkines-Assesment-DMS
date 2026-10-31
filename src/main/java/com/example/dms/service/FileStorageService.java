@@ -1,7 +1,5 @@
 package com.example.dms.service;
 
-import com.example.dms.config.AppProperties;
-import com.example.dms.exception.ApiException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -13,58 +11,33 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Locale;
-import java.util.Map;
 import java.util.TreeSet;
 import java.util.UUID;
-import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-/**
- * Stores uploads on local disk. Three independent checks protect against bad files:
- *  1. extension whitelist, 2. magic-number (file signature) check, 3. server-decided Content-Type
- * (the client-supplied Content-Type header is never trusted). Files are stored under a random
- * UUID name, which also rules out path traversal.
- */
+import com.example.dms.config.AppProperties;
+import com.example.dms.exception.ApiException;
+
+import lombok.extern.slf4j.Slf4j;
+
+
+
 @Slf4j
 @Service
-public class FileStorageService {
+@ConditionalOnProperty(
+	    name = "app.storage.type",
+	    havingValue = "local",
+	    matchIfMissing = true
+	)
+public class FileStorageService implements StorageService {
 
-    public record StoredFile(String storedName, String originalName, String contentType, long size, String sha256) {}
-
-    private static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    private static final String XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    private static final String PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-
-    private static final Map<String, String> ALLOWED_TYPES = Map.ofEntries(
-            Map.entry("pdf", "application/pdf"),
-            Map.entry("doc", "application/msword"),
-            Map.entry("docx", DOCX),
-            Map.entry("xls", "application/vnd.ms-excel"),
-            Map.entry("xlsx", XLSX),
-            Map.entry("ppt", "application/vnd.ms-powerpoint"),
-            Map.entry("pptx", PPTX),
-            Map.entry("png", "image/png"),
-            Map.entry("jpg", "image/jpeg"),
-            Map.entry("jpeg", "image/jpeg"),
-            Map.entry("gif", "image/gif"));
-
-    private static final byte[] PDF = {0x25, 0x50, 0x44, 0x46};                                   // %PDF
-    private static final byte[] OLE = {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0};              // legacy Office
-    private static final byte[] ZIP = {0x50, 0x4B, 0x03, 0x04};                                   // OOXML container
-    private static final byte[] PNG = {(byte) 0x89, 0x50, 0x4E, 0x47};
-    private static final byte[] JPG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF};
-    private static final byte[] GIF = {0x47, 0x49, 0x46, 0x38};                                   // GIF8
-
-    private static final Map<String, byte[]> SIGNATURES = Map.ofEntries(
-            Map.entry("pdf", PDF), Map.entry("doc", OLE), Map.entry("xls", OLE), Map.entry("ppt", OLE),
-            Map.entry("docx", ZIP), Map.entry("xlsx", ZIP), Map.entry("pptx", ZIP),
-            Map.entry("png", PNG), Map.entry("jpg", JPG), Map.entry("jpeg", JPG), Map.entry("gif", GIF));
-
-    private final Path root;
+	private static Path root ;
 
     public FileStorageService(AppProperties props) {
         this.root = Paths.get(props.storage().dir()).toAbsolutePath().normalize();
