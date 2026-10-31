@@ -32,6 +32,8 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            - name: SERVER_PORT
+              value: "8080"
             # Connect to PostgreSQL through the Cloud SQL Auth Proxy sidecar
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:postgresql://127.0.0.1:5432/DMS_DB"
